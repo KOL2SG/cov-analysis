@@ -577,7 +577,7 @@ validate_staged_report() {
   fi
 }
 
-publish_report() {
+_publish_report_unlocked() {
   local stage="$1" destination="$2" parent base rollback=""
   parent="$(dirname -- "$destination")"
   base="$(basename -- "$destination")"
@@ -614,12 +614,32 @@ publish_report() {
   return 0
 }
 
+publish_report() {
+  local guard rc=0
+  if test -z "$COV_REPORT_TOKEN"; then
+    _publish_report_unlocked "$@"
+    return $?
+  fi
+  guard="$COV_REPORT_CLEAN_LOCK.takeover"
+  acquire_report_guard "$guard" || return 1
+  if ! report_lock_owned; then
+    rmdir -- "$guard" || true
+    err "Report lock was taken over; refusing to publish from a superseded run."
+    return 1
+  fi
+  _publish_report_unlocked "$@" || rc=$?
+  rmdir -- "$guard" || rc=1
+  return "$rc"
+}
+
 COV_REPORT_CLEAN_PROFRAW=""
 COV_REPORT_CLEAN_STAGE=""
 COV_REPORT_CLEAN_LOCK=""
+COV_REPORT_TOKEN=""
 COV_LOCK_PID=""
 COV_LOCK_HOST=""
 COV_LOCK_STARTED=""
+COV_LOCK_OWNER_TOKEN=""
 COV_REMOTE_HOST=""
 COV_REMOTE_WORKDIR=""
 COV_REMOTE_SSHOPTS=()
@@ -627,7 +647,17 @@ COV_REMOTE_SSHOPTS=()
 cleanup_report_work() {
   test -z "$COV_REPORT_CLEAN_PROFRAW" || rm -rf -- "$COV_REPORT_CLEAN_PROFRAW"
   test -z "$COV_REPORT_CLEAN_STAGE" || rm -rf -- "$COV_REPORT_CLEAN_STAGE"
-  test -z "$COV_REPORT_CLEAN_LOCK" || rm -rf -- "$COV_REPORT_CLEAN_LOCK"
+  if test -n "$COV_REPORT_CLEAN_LOCK" && test -n "$COV_REPORT_TOKEN"; then
+    local guard="$COV_REPORT_CLEAN_LOCK.takeover"
+    if acquire_report_guard "$guard"; then
+      if report_lock_owned; then
+        rm -rf -- "$COV_REPORT_CLEAN_LOCK"
+      fi
+      rmdir -- "$guard" || true
+    fi
+    COV_REPORT_CLEAN_LOCK=""
+    COV_REPORT_TOKEN=""
+  fi
   remote_cleanup
 }
 
@@ -704,16 +734,36 @@ this_host() {
 # lock names no owner.
 read_lock_owner() {
   local dir="$1" key value
-  COV_LOCK_PID=""; COV_LOCK_HOST=""; COV_LOCK_STARTED=""
+  COV_LOCK_PID=""; COV_LOCK_HOST=""; COV_LOCK_STARTED=""; COV_LOCK_OWNER_TOKEN=""
   test -r "$dir/owner" || return 1
   while read -r key value; do
     case "$key" in
       pid)     COV_LOCK_PID="$value" ;;
       host)    COV_LOCK_HOST="$value" ;;
       started) COV_LOCK_STARTED="$value" ;;
+      token)   COV_LOCK_OWNER_TOKEN="$value" ;;
     esac
   done < "$dir/owner"
   test -n "$COV_LOCK_PID"
+}
+
+report_lock_owned() {
+  test -n "$COV_REPORT_CLEAN_LOCK" && test -n "$COV_REPORT_TOKEN" \
+    && read_lock_owner "$COV_REPORT_CLEAN_LOCK" \
+    && test "$COV_LOCK_OWNER_TOKEN" = "$COV_REPORT_TOKEN"
+}
+
+acquire_report_guard() {
+  local guard="$1" tries=0
+  until mkdir -- "$guard" 2>/dev/null; do
+    tries=$((tries + 1))
+    if test "$tries" -ge 5; then
+      err "Could not lock the report directory: another run holds $guard."
+      err "If no other cov-analysis run is starting, remove it with --clean."
+      return 1
+    fi
+    sleep 1
+  done
 }
 
 # Return 0 when the lock is held by a process that is still running. A lock
@@ -748,20 +798,23 @@ report_lock_refused() {
 }
 
 acquire_report_lock() {
-  local parent="$1" base="$2" force="${3:-0}" dir new guard tries=0
+  local parent="$1" base="$2" force="${3:-0}" dir new guard token
   dir="$(report_lock_path "$parent" "$base")"
   if ! new="$(mktemp -d "$dir.new.XXXXXX")"; then
     err "Could not lock the report directory: $dir"
     return 1
   fi
   chmod -- "$(umask -S)" "$new" 2>/dev/null || true
+  token="${new##*.}"
   {
     printf 'pid %s\n' "$$"
     printf 'started %s\n' "$(pid_start_time "$$")"
     printf 'host %s\n' "$(this_host)"
+    printf 'token %s\n' "$token"
   } > "$new/owner"
   if mv -T -- "$new" "$dir" 2>/dev/null; then
     COV_REPORT_CLEAN_LOCK="$dir"
+    COV_REPORT_TOKEN="$token"
     return 0
   fi
   if test "$force" -ne 1 && report_lock_live "$dir"; then
@@ -770,16 +823,10 @@ acquire_report_lock() {
     return 1
   fi
   guard="$dir.takeover"
-  until mkdir -- "$guard" 2>/dev/null; do
-    tries=$((tries + 1))
-    if test "$tries" -ge 5; then
-      rm -rf -- "$new"
-      err "Could not lock the report directory: another run holds $guard."
-      err "If no other cov-analysis run is starting, remove it with --clean."
-      return 1
-    fi
-    sleep 1
-  done
+  if ! acquire_report_guard "$guard"; then
+    rm -rf -- "$new"
+    return 1
+  fi
   if ! mv -T -- "$new" "$dir" 2>/dev/null; then
     if report_lock_live "$dir"; then
       if test "$force" -ne 1; then
@@ -802,6 +849,7 @@ acquire_report_lock() {
   fi
   rmdir -- "$guard"
   COV_REPORT_CLEAN_LOCK="$dir"
+  COV_REPORT_TOKEN="$token"
   return 0
 }
 
@@ -1510,7 +1558,8 @@ Optional:
                      input that does not terminate holds its batch until the
                      batch deadline: the queue timeout times <num>, but at most
                      10 times the queue timeout.
-  --force            Take over a report directory another run holds.
+  --force            Take over a report directory another run holds. The old
+                     run cannot publish or remove the new owner's lock.
   --clean            Remove the lock and staging directories of <-o> that no
                      running cov-analysis holds, then exit. A staging directory
                      survives a killed run; this is how to clear one safely.
@@ -1571,7 +1620,8 @@ Optional:
                      -o Key=Value form: ssh and scp disagree about -p. Quote a
                      value that contains spaces, as the shell would:
                      "-o 'IdentityFile=/keys/fuzz key'".
-  --remote-dir <dir> Remote working directory (default: a mktemp -d under the
+  --remote-dir <dir> Parent for a private remote working directory; existing
+                     contents are preserved (default: mktemp -d under the
                      remote TMPDIR)
   --migrate-existing-report
                      Replace a complete pre-marker cov-analysis report after a
@@ -1820,7 +1870,9 @@ Usage: cov-analysis search FILE:LINE -d <dir> -e "<cmd>" [options]
   line-execution count for that line is > 0.
 
   Matching input paths are printed to stdout (one per line, sorted), so the
-  output pipes cleanly. Progress and the summary go to stderr.
+  output pipes cleanly. Progress and the summary go to stderr. If some inputs
+  cannot be analyzed, matching paths are still printed with an incomplete-result
+  warning. The command fails if no inputs can be analyzed.
 
 Required:
   FILE:LINE   Source location, e.g. src/foo.c:123 (single line; split on last ':')
@@ -2493,17 +2545,34 @@ cmd_stability() {
 _search_replay_union() {
   local outdir="$1"
   export -f run_with_timeout command_for_input run_input_command \
-    run_input_command_unbounded replay_one_input
-  find_queue_files | number_inputs | xargs -0 -r -n 1 -P "$FORKS" \
-    bash -c 'replay_one_input "$1" "$2" "$3" "$4"' _ "$COVERAGE_CMD" "$TIMEOUT" "$outdir" \
-    >/dev/null 2>&1 || true
+    run_input_command_unbounded record_slow_input replay_one_input \
+    _search_union_one_input
+  if ! find_queue_files | number_inputs | xargs -0 -r -n 1 -P "$FORKS" \
+    bash -c '_search_union_one_input "$1" "$2" "$3" "$4"' \
+    _ "$COVERAGE_CMD" "$TIMEOUT" "$outdir" >/dev/null 2>&1; then
+    return 1
+  fi
 
   if test "$INCLUDE_CRASHES" -eq 1; then
     mkdir -p "$outdir/crash"
-    find_crash_timeout_files | number_inputs | xargs -0 -r -n 1 -P "$FORKS" \
-      bash -c 'replay_one_input "$1" "$2" "$3" "$4"' _ "$COVERAGE_CMD" "$TIMEOUT" "$outdir/crash" \
-      >/dev/null 2>&1 || true
+    if ! find_crash_timeout_files | number_inputs | xargs -0 -r -n 1 -P "$FORKS" \
+      bash -c '_search_union_one_input "$1" "$2" "$3" "$4"' \
+      _ "$COVERAGE_CMD" "$TIMEOUT" "$outdir/crash" >/dev/null 2>&1; then
+      return 1
+    fi
   fi
+}
+
+_search_union_one_input() {
+  local cmd="$1" seconds="$2" outdir="$3" record="$4" idx path
+  idx="${record%%$'\t'*}"
+  path="${record#*$'\t'}"
+  replay_one_input "$cmd" "$seconds" "$outdir" "$record" >/dev/null
+  if compgen -G "$outdir/${idx}-"'*.profraw' >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s\0' "$path" >> "$COV_SEARCH_UNION_ERROR_LOG"
+  return 1
 }
 
 # Per-input worker for the parallel scan. Replays ONE input in isolation, merges
@@ -2511,23 +2580,39 @@ _search_replay_union() {
 # The input path is $1; all other config is read from exported COV_SEARCH_* env
 # vars (cmd_search exports them before the xargs fan-out). This function and
 # lcov_line_state are `export -f`'d so the xargs `bash -c` subshells can call them.
-# Always best-effort: never aborts on a single bad input.
+# Records analysis success and failure so the caller can label partial results.
 _search_one_input() {
-  local in="$1" work state="absent"
-  work="$(mktemp -d "${COV_SEARCH_WORKROOT}/w.XXXXXX")" || return 0
+  local in="$1" work state="absent" failure=""
+  if ! work="$(mktemp -d "${COV_SEARCH_WORKROOT}/w.XXXXXX")"; then
+    printf '%s\0' "$in" >> "$COV_SEARCH_ERROR_LOG"
+    return 1
+  fi
   export LLVM_PROFILE_FILE="$work/cov-%p.profraw"
 
   run_input_command "$COV_SEARCH_TIMEOUT" "$COV_SEARCH_CMD" "$in" >/dev/null 2>&1 || true
 
   if compgen -G "$work/cov-"'*.profraw' >/dev/null 2>&1; then
     if merge_profiles "$COV_SEARCH_PROFDATA" "$work" "$work/m.profdata" 2>/dev/null; then
-      state="$("$COV_SEARCH_COV" export "$COV_SEARCH_BIN" --format=lcov \
-                 "-instr-profile=$work/m.profdata" 2>/dev/null \
-               | lcov_line_state "$COV_SEARCH_FILE" "$COV_SEARCH_LINE")"
+      if "$COV_SEARCH_COV" export "$COV_SEARCH_BIN" --format=lcov \
+           "-instr-profile=$work/m.profdata" > "$work/input.lcov" 2>/dev/null; then
+        state="$(lcov_line_state "$COV_SEARCH_FILE" "$COV_SEARCH_LINE" < "$work/input.lcov")" \
+          || failure="could not inspect LCOV output"
+      else
+        failure="llvm-cov export failed"
+      fi
+    else
+      failure="llvm-profdata merge failed"
     fi
+  else
+    failure="no coverage profile was produced"
   fi
 
   rm -rf "$work"
+  if test -n "$failure"; then
+    printf '%s\0' "$in" >> "$COV_SEARCH_ERROR_LOG"
+    return 1
+  fi
+  printf '%s\0' "$in" >> "$COV_SEARCH_OK_LOG"
   test "$state" = "covered" && printf '%s\n' "$in"
   return 0
 }
@@ -2664,25 +2749,44 @@ cmd_search() {
   loge "Union pre-check : replaying $TOTAL input(s) to test reachability..."
   local UNION_DIR="$SEARCH_DIR/union"
   mkdir -p "$UNION_DIR"
-  _search_replay_union "$UNION_DIR"
+  export COV_SEARCH_UNION_ERROR_LOG="$SEARCH_DIR/union-errors.list"
+  : > "$COV_SEARCH_UNION_ERROR_LOG"
+  local union_ready=1
+  if ! _search_replay_union "$UNION_DIR"; then
+    local union_error_count
+    union_error_count=$(tr -cd '\0' < "$COV_SEARCH_UNION_ERROR_LOG" | wc -c)
+    err "Warning: union pre-check failed for $union_error_count of $TOTAL selected inputs; scanning inputs individually."
+    union_ready=0
+  fi
 
-  local praw_count
-  praw_count=$(find "$UNION_DIR" -name '*.profraw' -printf . 2>/dev/null | wc -c)
-  if test "$praw_count" -eq 0; then
-    err "No .profraw files generated."
-    err "Check that the binary is instrumented with -fprofile-instr-generate."
-    err "Use 'cov-analysis build' to build the coverage binary."
-    exit 1
+  if test "$union_ready" -eq 1; then
+    local praw_count
+    praw_count=$(find "$UNION_DIR" -name '*.profraw' -printf . 2>/dev/null | wc -c)
+    if test "$praw_count" -eq 0; then
+      err "Warning: union pre-check produced no coverage profiles; scanning inputs individually."
+      union_ready=0
+    fi
   fi
 
   local union_state="absent"
-  if merge_profiles "$LLVM_PROFDATA" "$UNION_DIR" "$UNION_DIR/m.profdata" 2>/dev/null; then
-    union_state="$("$LLVM_COV" export "$COV_BINARY" --format=lcov \
-                     "-instr-profile=$UNION_DIR/m.profdata" 2>/dev/null \
-                   | lcov_line_state "$TARGET_FILE" "$TARGET_LINE")"
+  if test "$union_ready" -eq 1 && \
+     ! merge_profiles "$LLVM_PROFDATA" "$UNION_DIR" "$UNION_DIR/m.profdata" 2>/dev/null; then
+    err "Warning: union profile merge failed; scanning inputs individually."
+    union_ready=0
+  fi
+  if test "$union_ready" -eq 1 && \
+     ! "$LLVM_COV" export "$COV_BINARY" --format=lcov \
+       "-instr-profile=$UNION_DIR/m.profdata" > "$UNION_DIR/union.lcov" 2>/dev/null; then
+    err "Warning: union llvm-cov export failed; scanning inputs individually."
+    union_ready=0
+  fi
+  if test "$union_ready" -eq 1 && \
+     ! union_state="$(lcov_line_state "$TARGET_FILE" "$TARGET_LINE" < "$UNION_DIR/union.lcov")"; then
+    err "Warning: could not inspect union LCOV output; scanning inputs individually."
+    union_ready=0
   fi
 
-  if test "$union_state" != "covered"; then
+  if test "$union_ready" -eq 1 && test "$union_state" != "covered"; then
     if test "$union_state" = "uncovered"; then
       logerr "$TARGET_FILE:$TARGET_LINE is executable but no selected input reaches it."
       test "$INCLUDE_CRASHES" -eq 0 && \
@@ -2696,7 +2800,7 @@ cmd_search() {
   fi
 
   # ── per-input scan ───────────────────────────────────────────────────────
-  loge "Reachable in union; scanning $TOTAL input(s) individually (workers=$FORKS)..."
+  loge "Scanning $TOTAL input(s) individually (workers=$FORKS)..."
   export COV_SEARCH_CMD="$COVERAGE_CMD" \
          COV_SEARCH_BIN="$COV_BINARY" \
          COV_SEARCH_PROFDATA="$LLVM_PROFDATA" \
@@ -2704,24 +2808,40 @@ cmd_search() {
          COV_SEARCH_TIMEOUT="$TIMEOUT" \
          COV_SEARCH_FILE="$TARGET_FILE" \
          COV_SEARCH_LINE="$TARGET_LINE" \
-         COV_SEARCH_WORKROOT="$SEARCH_DIR"
+         COV_SEARCH_WORKROOT="$SEARCH_DIR" \
+         COV_SEARCH_ERROR_LOG="$SEARCH_DIR/errors.list" \
+         COV_SEARCH_OK_LOG="$SEARCH_DIR/analyzed.list"
+  : > "$COV_SEARCH_ERROR_LOG"
+  : > "$COV_SEARCH_OK_LOG"
   export -f _search_one_input lcov_line_state run_with_timeout command_for_input \
     run_input_command write_profile_manifest merge_profiles
 
-  {
+  local scan_status=0
+  if ! {
     find_queue_files
     test "$INCLUDE_CRASHES" -eq 1 && find_crash_timeout_files
+    true
   } | xargs -0 -r -n 1 -P "$FORKS" \
         bash -c '_search_one_input "$1"' _ \
-    | sort > "$SEARCH_DIR/matches.txt" || true
+    | sort > "$SEARCH_DIR/matches.txt"; then
+    scan_status=1
+  fi
 
-  local match_count
+  local match_count analyzed_count error_count
   # grep -c prints 0 and exits 1 on an empty file; `|| true` keeps that single
   # "0" without appending a second one (which `|| echo 0` would do).
   match_count=$(grep -c . "$SEARCH_DIR/matches.txt" 2>/dev/null || true)
   : "${match_count:=0}"
+  analyzed_count=$(tr -cd '\0' < "$COV_SEARCH_OK_LOG" | wc -c)
+  error_count=$(tr -cd '\0' < "$COV_SEARCH_ERROR_LOG" | wc -c)
 
   cat "$SEARCH_DIR/matches.txt"
+  if test "$scan_status" -ne 0 || test "$error_count" -ne 0 || \
+     test "$analyzed_count" -ne "$TOTAL"; then
+    err "Warning: search results incomplete: $analyzed_count of $TOTAL inputs analyzed; $error_count failed. $match_count matching input(s) shown."
+    if test "$analyzed_count" -eq 0; then return 1; fi
+    return 0
+  fi
   loge "$match_count of $TOTAL inputs reach $TARGET_FILE:$TARGET_LINE"
   exit 0
 }
@@ -4349,10 +4469,9 @@ run_remote_replay() {
   }
 
   if test -n "$remote_dir"; then
-    rd="$remote_dir"
-    ssh ${COV_REMOTE_SSHOPTS[@]+"${COV_REMOTE_SSHOPTS[@]}"} "$host" \
-      "mkdir -p -- $(printf '%q' "$rd")" || {
-      err "Could not create the remote working directory on $host: $rd"
+    rd="$(ssh ${COV_REMOTE_SSHOPTS[@]+"${COV_REMOTE_SSHOPTS[@]}"} "$host" \
+      "mkdir -p -- $(printf '%q' "$remote_dir") && mktemp -d -- $(printf '%q' "$remote_dir/cov-analysis-remote.XXXXXX")")" || {
+      err "Could not create a private remote working directory under $host:$remote_dir"
       return 1
     }
   else

@@ -104,6 +104,44 @@ printf '%s\n' "$out" | grep -q "Taking over the report directory from pid $HOLDE
 test -s "$REP/coverage.json" || die "the forced run did not publish"
 echo "[PASS] --force takes over a held directory"
 
+mkdir -p "$TMP/work/old-stage"
+printf old > "$TMP/work/old-stage/result"
+bash -c '
+  source "$1/cov-analysis"
+  acquire_report_lock "$2" rep 0 >/dev/null
+  touch "$2/old-ready"
+  for _ in $(seq 1 100); do test -e "$2/old-release" && break; sleep 0.05; done
+  rc=0
+  publish_report "$2/old-stage" "$2/old-published" >/dev/null 2>&1 || rc=$?
+  printf "%s\n" "$rc" > "$2/old-publish-status"
+  cleanup_report_work
+' _ "$ROOT" "$TMP/work" &
+OLD_RUN=$!
+for _ in $(seq 1 100); do test -e "$TMP/work/old-ready" && break; sleep 0.05; done
+test -e "$TMP/work/old-ready" || die "old run did not acquire its lock"
+bash -c '
+  source "$1/cov-analysis"
+  acquire_report_lock "$2" rep 1 >/dev/null
+  touch "$2/forced-ready"
+  for _ in $(seq 1 100); do test -e "$2/forced-release" && break; sleep 0.05; done
+  cleanup_report_work
+' _ "$ROOT" "$TMP/work" &
+FORCED_RUN=$!
+for _ in $(seq 1 100); do test -e "$TMP/work/forced-ready" && break; sleep 0.05; done
+test -e "$TMP/work/forced-ready" || die "forced run did not acquire its lock"
+touch "$TMP/work/old-release"
+wait "$OLD_RUN"
+test "$(cat "$TMP/work/old-publish-status")" -ne 0 \
+  || die "superseded run published after --force"
+test ! -e "$TMP/work/old-published" \
+  || die "superseded run replaced the report after --force"
+test -d "$LOCK" || die "superseded run removed the forced run's lock"
+out=$(run_report)
+test "$?" -ne 0 || die "a third run entered while the forced run held the lock: $out"
+touch "$TMP/work/forced-release"
+wait "$FORCED_RUN"
+echo "[PASS] a forced run retains its lock and fences the old publisher"
+
 # A lock whose holder is gone is broken automatically.
 kill "$HOLDER" 2>/dev/null
 wait "$HOLDER" 2>/dev/null

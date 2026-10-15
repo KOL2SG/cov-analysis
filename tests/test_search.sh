@@ -101,5 +101,96 @@ assert_eq "$(printf '%s' "$out_z" | grep -c .)" "0" "LINE_Z (unreached) returns 
 out_a8=$(bash ./cov-analysis search "$HARNESS:$LINE_A" -d "$AFL_DIR" -e "$COVBIN @@" -t 4 -q 2>/dev/null)
 assert_eq "$out_a8" "$out_a" "parallel scan matches serial"
 
+cat > "$TMP/no-profile-target" <<EOF
+#!/bin/bash
+if test "\$1" = "$AFL_DIR/queue/id:000000,time:0,src:000"; then exit 1; fi
+exec "$COVBIN" "\$@"
+EOF
+chmod +x "$TMP/no-profile-target"
+if ! bash ./cov-analysis search "$HARNESS:$LINE_B" -d "$AFL_DIR" \
+   -e "$TMP/no-profile-target @@" --binary "$COVBIN" \
+   > "$TMP/no-profile.out" 2> "$TMP/no-profile.err"; then
+  die "search failed instead of returning the analyzable input"
+fi
+assert_eq "$(cat "$TMP/no-profile.out")" "$AFL_DIR/queue/id:000001,time:0,src:000" "missing profile retains the B match"
+grep -qi 'incomplete.*1 of 2.*analyzed' "$TMP/no-profile.err" \
+  || die "search did not warn that the partial result is incomplete"
+if ! bash ./cov-analysis search "$HARNESS:$LINE_A" -d "$AFL_DIR" \
+   -e "$TMP/no-profile-target @@" --binary "$COVBIN" -q \
+   > "$TMP/unknown-zero.out" 2> "$TMP/unknown-zero.err"; then
+  die "search failed when one input was analyzable but none matched"
+fi
+test ! -s "$TMP/unknown-zero.out" || die "search printed a match for an input that could not be analyzed"
+grep -qi 'incomplete.*1 of 2.*analyzed' "$TMP/unknown-zero.err" \
+  || die "quiet search omitted the incomplete-result warning"
+echo "[PASS] a missing union profile returns a labeled partial result"
+
+REAL_LLVM_COV="$(command -v "$(find_tool llvm-cov)")"
+printf 'Aagain' > "$AFL_DIR/queue/id:000001,time:0,src:000"
+mkdir -p "$TMP/tools"
+cat > "$TMP/tools/llvm-cov" <<'EOF'
+#!/bin/bash
+if test "$1" = export; then
+  count=0
+  test -f "$EXPORT_MARK" && count=$(cat "$EXPORT_MARK")
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$EXPORT_MARK"
+  test "$count" -eq 2 && exit 1
+fi
+exec "$REAL_LLVM_COV" "$@"
+EOF
+chmod +x "$TMP/tools/llvm-cov"
+if ! PATH="$TMP/tools:$PATH" CC=/bin/true EXPORT_MARK="$TMP/export-seen" \
+   REAL_LLVM_COV="$REAL_LLVM_COV" \
+   bash ./cov-analysis search "$HARNESS:$LINE_A" -d "$AFL_DIR" -e "$COVBIN @@" \
+   > "$TMP/broken.out" 2> "$TMP/broken.err"; then
+  die "search failed instead of returning the analyzable input after an isolated export failure"
+fi
+assert_eq "$(wc -l < "$TMP/broken.out")" "1" "isolated export failure retains one matching input"
+case "$(cat "$TMP/broken.out")" in
+  "$AFL_DIR/queue/id:000000,time:0,src:000"|"$AFL_DIR/queue/id:000001,time:0,src:000") ;;
+  *) die "search printed an unexpected input after an isolated export failure" ;;
+esac
+grep -qi 'incomplete.*1 of 2.*analyzed' "$TMP/broken.err" \
+  || die "search did not warn about the isolated export failure"
+echo "[PASS] an isolated export failure returns a labeled partial result"
+printf 'Bworld' > "$AFL_DIR/queue/id:000001,time:0,src:000"
+
+REAL_LLVM_PROFDATA="$(command -v "$(find_tool llvm-profdata)")"
+cat > "$TMP/tools/llvm-profdata" <<'EOF'
+#!/bin/bash
+if ! test -e "$MERGE_MARK"; then
+  : > "$MERGE_MARK"
+  exit 1
+fi
+exec "$REAL_LLVM_PROFDATA" "$@"
+EOF
+chmod +x "$TMP/tools/llvm-profdata"
+if ! PATH="$TMP/tools:$PATH" CC=/bin/true REAL_LLVM_COV="$REAL_LLVM_COV" \
+   MERGE_MARK="$TMP/merge-seen" REAL_LLVM_PROFDATA="$REAL_LLVM_PROFDATA" \
+   bash ./cov-analysis search "$HARNESS:$LINE_A" -d "$AFL_DIR" -e "$COVBIN @@" \
+   > "$TMP/union-broken.out" 2> "$TMP/union-broken.err"; then
+  die "search failed instead of scanning inputs after the union merge failed"
+fi
+assert_eq "$(cat "$TMP/union-broken.out")" "$AFL_DIR/queue/id:000000,time:0,src:000" "union merge failure falls back to isolated scan"
+grep -qi 'union.*failed.*individual' "$TMP/union-broken.err" \
+  || die "search did not explain the union fallback"
+echo "[PASS] a union merge failure falls back to isolated scans"
+
+cat > "$TMP/no-profile-anywhere" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+chmod +x "$TMP/no-profile-anywhere"
+if bash ./cov-analysis search "$HARNESS:$LINE_A" -d "$AFL_DIR" \
+   -e "$TMP/no-profile-anywhere @@" --binary "$COVBIN" \
+   > "$TMP/all-failed.out" 2> "$TMP/all-failed.err"; then
+  die "search reported success with no analyzable inputs"
+fi
+test ! -s "$TMP/all-failed.out" || die "search printed matches with no analyzable inputs"
+grep -qi '0 of 2.*analyzed' "$TMP/all-failed.err" \
+  || die "search did not explain that no inputs could be analyzed"
+echo "[PASS] no analyzable inputs still fail"
+
 echo "[PASS] search integration"
 echo "[PASS] test_search"

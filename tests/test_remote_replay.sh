@@ -138,6 +138,17 @@ grep -q 'rm -rf' "$SSH_LOG" \
   || die "the remote working directory was not cleaned up: $(cat "$SSH_LOG")"
 echo "[PASS] the script ships itself, only the profile returns, remote temp is cleaned"
 
+mkdir -p "$TMP/remote-parent"
+printf 'keep\n' > "$TMP/remote-parent/unrelated.txt"
+out=$(bash ./cov-analysis report --remote fuzzbox -d "$CORPUS" -e "$TMP/target @@" \
+  --binary "$TMP/target" -o "$TMP/report-parent" \
+  --remote-dir "$TMP/remote-parent" 2>&1) || die "remote report with parent failed: $out"
+test -f "$TMP/remote-parent/unrelated.txt" \
+  || die "remote cleanup removed unrelated data in --remote-dir"
+test "$(find "$TMP/remote-parent" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 \
+  || die "remote cleanup left work inside --remote-dir"
+echo "[PASS] --remote-dir preserves its existing contents"
+
 # ── ssh options are passed through ───────────────────────────────────────────
 : > "$SSH_LOG"
 bash ./cov-analysis report --remote fuzzbox --ssh-opts "-o Port=2222" -d "$CORPUS" \
@@ -192,6 +203,8 @@ EOF
 chmod +x "$TMP/slowtarget"
 export TRACE_FILE="$TMP/remote-trace"
 : > "$TRACE_FILE"
+mkdir -p "$TMP/remote"
+printf 'keep\n' > "$TMP/remote/unrelated.txt"
 set -m
 bash ./cov-analysis report --remote fuzzbox -d "$TMP/slowcorpus" \
   -e "$TMP/slowtarget @@" --binary "$TMP/slowtarget" -o "$TMP/report7" \
@@ -217,7 +230,9 @@ started=$(grep -c . "$TRACE_FILE")
 sleep 3
 assert_eq "$(grep -c . "$TRACE_FILE")" "$started" \
   "the remote replay kept starting inputs after Ctrl-C"
-test -e "$TMP/remote" && die "Ctrl-C left the remote working directory behind"
+test -f "$TMP/remote/unrelated.txt" || die "Ctrl-C removed unrelated remote data"
+test "$(find "$TMP/remote" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 \
+  || die "Ctrl-C left remote work behind"
 test -e "$TMP/report7" && die "an interrupted remote run must not publish"
 echo "[PASS] Ctrl-C stops the remote replay and removes its working directory"
 
@@ -232,7 +247,9 @@ started=$(grep -c . "$TRACE_FILE")
 sleep 3
 assert_eq "$(grep -c . "$TRACE_FILE")" "$started" \
   "the remote replay kept running after the connection dropped"
-test -e "$TMP/remote" && die "a dropped connection left the remote working directory behind"
+test -f "$TMP/remote/unrelated.txt" || die "a dropped connection removed unrelated remote data"
+test "$(find "$TMP/remote" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 \
+  || die "a dropped connection left remote work behind"
 grep '^ssh' "$SSH_LOG" | grep -qF '[-o] [ConnectTimeout=15]' \
   || die "the cleanup ssh must not wait for the TCP timeout: $(cat "$SSH_LOG")"
 echo "[PASS] a dropped connection stops the remote replay and removes its working directory"

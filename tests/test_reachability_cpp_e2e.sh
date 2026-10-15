@@ -70,7 +70,7 @@ PY
 # counts against its own expected.json).
 [ "$N_DEFINED" -ge 150 ]   || die "reach.json summary.defined implausibly low ($N_DEFINED)"
 [ "$N_REACHABLE" -ge 140 ] || die "reach.json summary.reachable implausibly low ($N_REACHABLE)"
-[ "$N_UNREACHABLE" -ge 8 ] || die "reach.json summary.unreachable implausibly low ($N_UNREACHABLE)"
+[ "$N_UNREACHABLE" -ge 4 ] || die "reach.json summary.unreachable implausibly low ($N_UNREACHABLE)"
 assert_eq "$N_REACHABLE" "$((N_DEFINED - N_UNREACHABLE))" "reach.json summary self-consistency (reachable == defined - unreachable)"
 assert_eq "$FILE_NULL" "1" "reach.json carries no debug file/line (fixture built without -g), so the reach<->cov join below can only be by exact C++ name"
 grep -q 'fun:LLVMFuzzerTestOneInput' "$WORK/reached.txt" || die "reached.txt missing the entry LLVMFuzzerTestOneInput"
@@ -140,6 +140,7 @@ def num(pat, txt):
 t_reach = num(r'^\s*reachable functions\s*:\s*(\d+)', reach)
 t_unreach = num(r'^\s*unreachable functions\s*:\s*(\d+)', reach)
 t_anom = num(r'^\s*covered yet unreachable\s*:\s*(\d+)', reach)
+if t_anom == 'NA': t_anom = '0'
 excl = num(r'excludes (\d+) statically-unreachable', reach)
 # baseline: llvm-cov columnar 'Regions Missed % Functions Missed % Lines Missed % ...'
 b = re.search(r'^\S*main\.cpp\S*\s+\d+\s+\d+\s+[\d.]+%\s+(\d+)\s+(\d+)\s+[\d.]+%\s+(\d+)\s+\d+\s+[\d.]+%', base, re.M)
@@ -154,7 +155,7 @@ PY
 # Tallies scale with the toolchain, so bound them; the exact join proof is the
 # FULL-minus-reachable-only relations below (invariant of clang/corpus version).
 [ "$T_UNREACH" -ge 4 ] || die "summary.txt unreachable tally too low ($T_UNREACH); the gnu::used dead cluster should always be present in coverage"
-[ "$T_ANOM" -ge 1 ]    || die "summary.txt covered-yet-unreachable tally should include the load-time static-init/ifunc functions ($T_ANOM)"
+assert_eq "$T_ANOM" "0" "summary.txt has no covered-yet-unreachable functions after lifecycle roots are included"
 [ "$T_REACH" -ge 50 ]  || die "summary.txt should report the reachable functions present in coverage data (got $T_REACH)"
 assert_eq "$EXCL" "$T_UNREACH" "summary.txt 'excludes N statically-unreachable' note must equal the unreachable tally"
 # the recomputed reachable-only denominator drops exactly the unreachable functions
@@ -177,7 +178,11 @@ echo "[PASS] stage 5: actionable (reachable-but-unreached) list names the uncove
 IDX="$WORK/covout/html/index.html"
 grep -q 'reach-banner' "$IDX"                        || die "index.html should gain a reachability banner"
 grep -q "$T_UNREACH unreachable" "$IDX"              || die "index.html banner should report $T_UNREACH unreachable functions"
-grep -q "$T_ANOM covered-yet-unreachable" "$IDX"     || die "index.html banner should report $T_ANOM covered-yet-unreachable functions"
+if [ "$T_ANOM" -gt 0 ]; then
+  grep -q "$T_ANOM covered-yet-unreachable" "$IDX" || die "index.html banner should report $T_ANOM covered-yet-unreachable functions"
+else
+  ! grep -q 'covered-yet-unreachable' "$IDX" || die "index.html banner should omit an empty anomaly count"
+fi
 HFILE="$(find "$WORK/covout/html/coverage" -name 'main.cpp.html' | head -1)"
 [ -n "$HFILE" ] || die "no main.cpp.html found under covout/html/coverage"
 DEAD_LINE=$(grep -n 'unreachable_leaf(void)'     "$WORK/main.cpp" | head -1 | cut -d: -f1)

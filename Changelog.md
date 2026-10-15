@@ -1,4 +1,7 @@
 # v1.3-dev
+- `--remote-dir` now names a parent for a private remote work directory; cleanup preserves files already in that parent
+- `--force` fences a superseded run from publishing or removing the new owner's report lock
+- `search` warns when coverage analysis is incomplete and prints matches from analyzable inputs; a failed union pre-check falls back to individual scans, while a search with no analyzable inputs still fails
 - `--reachability`: a Rust v0 name is matched by fuzz-reachability's `key`, which ignores its trailing instantiating crate as it already ignored a legacy name's `17h<hash>` disambiguator, so a generic instance that another crate compiled still classifies
 - added --batch for better performance
 - fixed AFL++ directory, it is .../hangs not .../timeouts

@@ -327,7 +327,9 @@ list of reachable-but-not-reached functions to go after.
 > `file`/`line` for the function (i.e. the analyzed bitcode has debug info),
 > the `(file, line)` fallback used above still classifies it correctly;
 > without debug info the function has no fallback and is left `unknown`. See
-> fuzz-reachability's README for the full explanation.
+> fuzz-reachability's
+> [docs/rust.md](https://github.com/AFLplusplus/fuzz-reachability/blob/main/docs/rust.md#mangling)
+> for the full explanation.
 
 **The coverage numbers themselves are recomputed to exclude unreachable
 functions.** Normally a function coverage of `5/6` counts a statically-dead
@@ -407,10 +409,13 @@ cov-analysis --remote fuzzbox -d /fuzz/out -e "/fuzz/cov @@" \
 
 `-d` and `-e` are paths on the remote host; `--binary` is the matching local
 binary used for rendering, and `-o` is required. Only `coverage.profdata` comes
-back — never the corpus. The remote working directory is removed however the
-run ends; a replay still running on the remote host after Ctrl-C or a dropped
-connection is stopped first. Pass ssh/scp options with
-`--ssh-opts "-o Port=2222"`; quote a value that contains spaces, as in
+back — never the corpus. By default, a private remote working directory is
+created under the remote `TMPDIR` (or `/tmp`). `--remote-dir` selects a parent
+directory for a private work directory and preserves its existing contents.
+The private directory is removed when the run ends. A replay still running on
+the remote host after Ctrl-C or a dropped connection is stopped first. Pass
+ssh/scp options with `--ssh-opts "-o Port=2222"`; quote a value that contains
+spaces, as in
 `--ssh-opts "-o 'IdentityFile=/keys/fuzz key'"`.
 
 `--profdata` is also how you re-render an existing report with a different
@@ -426,8 +431,9 @@ tells them apart.
 
 A run locks its output directory for as long as it holds it. A second run
 against the same `-o` is refused, naming the pid of the one that has it; pass
-`--force` to take the directory over. The lock and the staging directory live
-beside the report as `.<name>.cov-analysis.lock` and
+`--force` to take the directory over. A superseded run cannot publish or remove
+the new owner's lock. The lock and the staging directory live beside the
+report as `.<name>.cov-analysis.lock` and
 `.<name>.cov-analysis.stage.*` — beside it, because publication is an atomic
 rename and a rename cannot cross filesystems.
 
@@ -571,7 +577,10 @@ A fast union pre-check replays the whole corpus once first; `-T` bounds every
 selected input in this phase and in the isolated scan. If no input reaches
 the line, `search` reports `0 of N` immediately (and tells you whether the line
 is merely unreached or not present in the coverage data at all) without the full
-per-input scan.
+per-input scan. If the union pre-check fails, `search` scans inputs individually.
+When some inputs cannot be analyzed, it still prints matches from the others on
+stdout and warns on stderr that the result is incomplete, with analyzed and
+failed counts. If none can be analyzed, it exits with an error.
 
 Pipe the reaching inputs straight into another tool:
 
@@ -651,7 +660,8 @@ Optional:
                      -d/-e are remote paths, --binary is the local binary
   --ssh-opts <opts>  Options for ssh and scp, e.g. "-o Port=2222"; quote
                      values that contain spaces
-  --remote-dir <dir> Remote working directory (default: remote mktemp -d)
+  --remote-dir <dir> Parent for a private remote working directory
+                     (default: remote mktemp -d under TMPDIR or /tmp)
   --migrate-existing-report
                      Explicitly replace a complete pre-marker report after a
                      successful staged run; arbitrary directories are refused
