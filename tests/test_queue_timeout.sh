@@ -127,7 +127,7 @@ export CC=/bin/true MERGE_COUNT_FILE="$TMP/merged"
 
 run_report() {
   rm -rf "$TMP/rep" "$TMP/merged"
-  PATH="$TOOLS:/usr/bin:/bin" timeout 120 \
+  PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" 120 \
     bash "$ROOT/cov-analysis" report -d "$TMP/out" -o "$TMP/rep" -t 3 "$@" 2>&1
 }
 

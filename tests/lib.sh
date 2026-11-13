@@ -17,6 +17,13 @@ if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
   unset _prefix _pkg _dir
 fi
 
+# timeout(1), resolved against the full PATH above. Tests run cov-analysis as
+# `PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" …`, and bash looks a command up
+# in the PATH assigned in front of it: a bare `timeout` there needs one in
+# /usr/bin, which Linux has but macOS before 26 does not (Homebrew coreutils'
+# lives in gnubin). Unresolved, it stays `timeout` and fails by that name.
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || echo timeout)"
+
 # die "message" → print to stderr and exit 1
 die() { echo "[FAIL] $*" >&2; exit 1; }
 

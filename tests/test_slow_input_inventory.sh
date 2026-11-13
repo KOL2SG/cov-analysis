@@ -65,7 +65,7 @@ export CC=/bin/true
 
 # ── loop mode: the shell names the input it killed ────────────────────────────
 rm -rf "$TMP/rep"
-out=$(PATH="$TOOLS:/usr/bin:/bin" timeout 120 bash "$ROOT/cov-analysis" report \
+out=$(PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" 120 bash "$ROOT/cov-analysis" report \
   -d "$TMP/out" -e "$TMP/target @@ /dev/null" -o "$TMP/rep" --queue-timeout 2 2>&1)
 assert_eq "$?" "0" "the run must publish even when an input hit the deadline: $out"
 test -s "$TMP/rep/slow_inputs.txt" || die "no slow input inventory was published: $out"
@@ -80,7 +80,7 @@ echo "[PASS] loop mode names the input it killed"
 
 # ── a clean corpus publishes no inventory ─────────────────────────────────────
 rm -rf "$TMP/rep" "$TMP/out/queue/id:000001,time:0,src:000"
-out=$(PATH="$TOOLS:/usr/bin:/bin" timeout 120 bash "$ROOT/cov-analysis" report \
+out=$(PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" 120 bash "$ROOT/cov-analysis" report \
   -d "$TMP/out" -e "$TMP/target @@ /dev/null" -o "$TMP/rep" --queue-timeout 2 2>&1)
 assert_eq "$?" "0" "a clean corpus must still publish: $out"
 test -e "$TMP/rep/slow_inputs.txt" \
@@ -111,7 +111,7 @@ EOF
 
 printf hang > "$HANG_INPUT"
 rm -rf "$TMP/rep"
-out=$(PATH="$TOOLS:/usr/bin:/bin" timeout 120 bash "$ROOT/cov-analysis" report \
+out=$(PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" 120 bash "$ROOT/cov-analysis" report \
   -d "$TMP/out" -e "$TMP/cov @@" --binary "$TMP/cov" -o "$TMP/rep" \
   --queue-timeout 2 2>&1)
 assert_eq "$?" "0" "batch replay with a hanging input must publish: $out"

@@ -61,7 +61,7 @@ REP="$TMP/work/rep"
 LOCK="$TMP/work/.rep.cov-analysis.lock"
 
 run_report() {
-  PATH="$TOOLS:/usr/bin:/bin" timeout 120 bash "$ROOT/cov-analysis" report \
+  PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" 120 bash "$ROOT/cov-analysis" report \
     -d "$TMP/out" -e "$TMP/target @@" -o "$REP" "$@" 2>&1
 }
 

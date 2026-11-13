@@ -61,7 +61,7 @@ export CC=/bin/true
 
 run_report() {
   rm -rf "$TMP/rep"
-  PATH="$TOOLS:/usr/bin:/bin" timeout 180 bash "$ROOT/cov-analysis" report \
+  PATH="$TOOLS:/usr/bin:/bin" "$TIMEOUT_BIN" 180 bash "$ROOT/cov-analysis" report \
     -d "$TMP/out" -e "$TMP/target @@ /dev/null" -o "$TMP/rep" -t 2 "$@"
 }
 
