@@ -14,7 +14,15 @@
 #include <string.h>
 #include <signal.h>
 
+#ifdef __APPLE__
+/* Mach-O cannot leave a weak reference undefined in a static link; carry a
+ * weak no-op default instead (as the generated coverage_driver.c does). */
+__attribute__((weak)) int LLVMFuzzerInitialize(int *argc, char ***argv) {
+    (void)argc; (void)argv; return 0;
+}
+#else
 int LLVMFuzzerInitialize(int *argc, char ***argv) __attribute__((weak));
+#endif
 int LLVMFuzzerTestOneInput(const unsigned char*, size_t);
 
 extern int __llvm_profile_write_file(void);

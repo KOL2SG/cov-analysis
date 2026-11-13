@@ -22,3 +22,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang llvm
       - name: Run tests
         run: make test
+
+  macos:
+    # Apple Silicon. Xcode provides clang and, through xcrun, llvm-profdata and
+    # llvm-cov; Homebrew provides bash >= 4.4 and the GNU userland.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bash and GNU tools
+        run: brew install bash coreutils findutils gawk
+      - name: Run tests
+        run: make test

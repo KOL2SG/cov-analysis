@@ -24,7 +24,8 @@ for cmd in timeout realpath mv; do
     || die "uutils $cmd was rejected"
 done
 
-run_with_timeout 1 /bin/true || die "uutils timeout wrapper failed"
+# The true executable, wherever it lives (/bin/true on Linux, /usr/bin/true on macOS).
+run_with_timeout 1 "$(type -P true)" || die "uutils timeout wrapper failed"
 assert_eq "$(realpath -m -- "$TMP/missing/../report")" "$TMP/report" \
   "uutils realpath -m"
 

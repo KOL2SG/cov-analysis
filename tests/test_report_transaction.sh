@@ -168,7 +168,9 @@ test -L "$TMP/symlink-report" || die "report destination symlink was replaced"
 test -f "$TMP/symlink-target/.cov-analysis-report" || die "symlink target report marker missing"
 
 mkdir -p "$TMP/xchg/a" "$TMP/xchg/b"
-if mv --exchange -T -- "$TMP/xchg/a" "$TMP/xchg/b" 2>/dev/null; then
+# Probe the mv the script itself uses: on macOS it puts Homebrew's GNU
+# coreutils ahead of /usr/bin, which this test's narrowed PATH leaves out.
+if ( source ./cov-analysis; mv --exchange -T -- "$TMP/xchg/a" "$TMP/xchg/b" ) 2>/dev/null; then
   (
     source ./cov-analysis
     set +e

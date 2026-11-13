@@ -149,6 +149,11 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size) {
 EOF
 "$CLANG" -fprofile-instr-generate -fcoverage-mapping "$DRIVER" "$TMP/harness_spin.c" \
   -o "$TMP/cov4" || die "spinning harness compilation failed"
+# Run the new binary once before the timed loop: macOS assesses a freshly
+# linked executable on its first exec (measured: ~170 ms, against ~8 ms after),
+# and under load that can outlast the 0.3 s below, so TERM would arrive before
+# the driver had installed its handler. What is tested is the handler.
+LLVM_PROFILE_FILE="$TMP/warmup.profraw" "$TMP/cov4" "$TMP/in1" >/dev/null 2>&1 || true
 kept=0
 for _ in $(seq 1 10); do
   rm -f "$TMP/term.profraw" "$TMP/term.profdata"
@@ -182,7 +187,12 @@ base=$(basename "$CLANG")
 case "$base" in clang-*) command -v "clangd-${base#clang-}" >/dev/null 2>&1 && CLANGD="clangd-${base#clang-}";; esac
 test -n "$CLANGD" || CLANGD="$(command -v clangd 2>/dev/null || true)"
 if test -n "$CLANGD"; then
-  "$CLANGD" --check="$DRIVER" --compile-commands-dir="$TMP" >"$TMP/clangd.log" 2>&1 \
+  # Diagnostics only: without --check-locations=false, clangd also self-tests
+  # every refactoring at every location and counts that tool's own failures
+  # (e.g. "tweak: SwapBinaryOperands ==> FAIL") as errors, which says nothing
+  # about the driver. Seen with Apple clangd 21 and upstream clangd 23.
+  "$CLANGD" --check="$DRIVER" --compile-commands-dir="$TMP" --check-locations=false \
+    >"$TMP/clangd.log" 2>&1 \
     || { cat "$TMP/clangd.log" >&2; die "clangd reported generated-driver diagnostics"; }
 else
   echo "[SKIP] clangd generated-driver check (clangd unavailable)"

@@ -1,5 +1,22 @@
 # tests/lib.sh — test helpers used by every tests/test_*.sh
 
+# macOS: run the tests with the same GNU userland cov-analysis itself puts first
+# on PATH there (see use_macos_gnu_tools in cov-analysis) — Homebrew's keg-only
+# gawk, findutils and coreutils. Tests count with `wc`, sort with `sort -V`, and
+# so on, exactly as on Linux. Nothing changes on other systems.
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  for _prefix in "${HOMEBREW_PREFIX-}" /opt/homebrew /usr/local; do
+    [ -n "$_prefix" ] || continue
+    for _pkg in gawk findutils coreutils; do
+      _dir="$_prefix/opt/$_pkg/libexec/gnubin"
+      [ -d "$_dir" ] || continue
+      case ":$PATH:" in *":$_dir:"*) ;; *) PATH="$_dir:$PATH" ;; esac
+    done
+  done
+  export PATH
+  unset _prefix _pkg _dir
+fi
+
 # die "message" → print to stderr and exit 1
 die() { echo "[FAIL] $*" >&2; exit 1; }
 
@@ -91,7 +108,13 @@ mkfixture_libafl_queue() {
 }
 
 # mktmp — returns a tempdir path; auto-cleanup on EXIT via caller's trap
-mktmp() { mktemp -d "${TMPDIR:-/tmp}/afl-cov-test.XXXXXX"; }
+# The canonical path: cov-analysis prints resolved paths, and macOS's TMPDIR
+# (/var/folders/…) is a symlink into /private/var. On Linux /tmp already is.
+mktmp() {
+  local d
+  d="$(mktemp -d "${TMPDIR:-/tmp}/afl-cov-test.XXXXXX")" || return 1
+  realpath -- "$d"
+}
 
 # detect_clang — echo a usable clang binary name (clang or clang-NN), return 1
 # if none is found. Used by toolchain-gated integration tests to skip cleanly.

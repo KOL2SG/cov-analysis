@@ -43,7 +43,7 @@ The coverage reports can be augmented with harness reachability information from
 
 ## Prerequisites
 
-- Bash
+- Bash 4.4 or newer
 - `clang` (any version down to 11)
 - `llvm-profdata` and `llvm-cov` — auto-detected to match the selected clang
   version. When a versioned compiler is chosen (e.g. `CC=clang-22`, or the
@@ -57,6 +57,31 @@ The coverage reports can be augmented with harness reachability information from
   and the macro-definition split in `stability` (skipped if absent there).
 - GNU awk (`gawk`) for `stability`.
 - AFL++ (`afl-fuzz`), libafl, libfuzzer, Honggfuzz, ... - only needed to produce the corpus, not to run `cov-analysis`
+
+### macOS
+
+macOS (tested on Apple Silicon) works with the Xcode command line tools
+(`xcode-select --install`) plus Homebrew:
+
+```bash
+brew install bash coreutils findutils gawk
+```
+
+- **Bash**: macOS's `/bin/bash` is 3.2. `cov-analysis` re-runs itself under
+  Homebrew's bash automatically, so it can still be started as `cov-analysis` or
+  `bash cov-analysis`.
+- **GNU tools**: Homebrew installs them under `g`-prefixed names and keeps the
+  plain ones in "gnubin" directories. On macOS `cov-analysis` inserts those
+  directories into its own `PATH`, just ahead of `/usr/bin`, so no shell setup
+  is needed.
+- **LLVM tools**: with Apple's clang (the default `clang`), `llvm-profdata` and
+  `llvm-cov` come from the same Xcode toolchain (`xcrun`), which is the version
+  that can read its raw profiles. With Homebrew's LLVM, select it as the
+  compiler (`CC=/opt/homebrew/opt/llvm/bin/clang`); the tools next to it are
+  used, even though that LLVM is not on `PATH`.
+- Where Linux reads `/proc`, macOS uses `ps` (report-directory locks, remote
+  cleanup) and the wall clock (replay progress). Published reports are swapped
+  into place atomically as on Linux (GNU `mv --exchange`).
 
 ## Supported Fuzzers
 

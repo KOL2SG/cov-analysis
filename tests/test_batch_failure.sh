@@ -52,10 +52,15 @@ done
 while IFS= read -r f; do cat -- "$f" >> "$out"; done < "$manifest"
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$TOOLS/llvm-cov"
+# The wrapper hands off to the GNU timeout the script would otherwise use:
+# /usr/bin/timeout on Linux, Homebrew's coreutils one on macOS (where
+# /usr/bin/timeout is BSD's), which tests/lib.sh put on PATH.
+REAL_TIMEOUT="$(command -v timeout)"
+export REAL_TIMEOUT
 cat > "$TOOLS/timeout" <<'EOF'
 #!/bin/bash
 case "${DEADLINE_LOG:+set}:$3" in set:*[0-9]s) printf '%s\n' "$3" >> "$DEADLINE_LOG" ;; esac
-exec /usr/bin/timeout "$@"
+exec "${REAL_TIMEOUT:-/usr/bin/timeout}" "$@"
 EOF
 chmod +x "$TOOLS/llvm-profdata" "$TOOLS/llvm-cov" "$TOOLS/timeout"
 export CC=/bin/true

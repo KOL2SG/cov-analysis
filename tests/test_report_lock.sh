@@ -106,7 +106,7 @@ echo "[PASS] --force takes over a held directory"
 
 mkdir -p "$TMP/work/old-stage"
 printf old > "$TMP/work/old-stage/result"
-bash -c '
+"$BASH" -c '
   source "$1/cov-analysis"
   acquire_report_lock "$2" rep 0 >/dev/null
   touch "$2/old-ready"
@@ -119,7 +119,7 @@ bash -c '
 OLD_RUN=$!
 for _ in $(seq 1 100); do test -e "$TMP/work/old-ready" && break; sleep 0.05; done
 test -e "$TMP/work/old-ready" || die "old run did not acquire its lock"
-bash -c '
+"$BASH" -c '
   source "$1/cov-analysis"
   acquire_report_lock "$2" rep 1 >/dev/null
   touch "$2/forced-ready"
@@ -225,7 +225,7 @@ race_for_lock() {
   : > "$TMP/winners"
   : > "$TMP/finished"
   for _ in $(seq 1 40); do
-    bash -c '
+    "$BASH" -c '
       cd "$1"
       source ./cov-analysis
       set +e

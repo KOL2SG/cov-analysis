@@ -1015,10 +1015,11 @@ echo "[PASS] M3: _reach_key handles deep and non-ASCII v0 names like C++ canonic
 CLANG="$(detect_clang || true)"
 COVTOOL=""
 if [ -n "$CLANG" ]; then
-  ver="${CLANG#clang}"; ver="${ver#-}"
-  for c in "llvm-cov${ver:+-$ver}" llvm-cov; do command -v "$c" >/dev/null 2>&1 && { COVTOOL="$c"; break; }; done
-  pd=""
-  for p in "llvm-profdata${ver:+-$ver}" llvm-profdata; do command -v "$p" >/dev/null 2>&1 && { pd="$p"; break; }; done
+  # The tools that belong to this clang, found the way cov-analysis finds them
+  # (clang-NN -> llvm-cov-NN; on macOS also Apple's via xcrun or a keg-only
+  # Homebrew LLVM next to the compiler).
+  COVTOOL="$(CC="$CLANG" find_tool llvm-cov || true)"
+  pd="$(CC="$CLANG" find_tool llvm-profdata || true)"
 fi
 if [ -n "$CLANG" ] && [ -n "$COVTOOL" ] && [ -n "${pd:-}" ]; then
   E="$TMP/e2e"; mkdir -p "$E"

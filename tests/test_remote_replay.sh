@@ -78,18 +78,38 @@ while test $# -gt 0; do
   esac
 done
 test "$host" = "$EXPECT_HOST" || { echo "unexpected host: $host" >&2; exit 255; }
+# Run a command in a session of its own, as an ssh login would: util-linux
+# `setsid -f [-w]` on Linux; elsewhere (macOS has no setsid command) the same
+# fork + setsid() + exec in perl, waiting for it and returning its status with -w.
+# With -w the stub execs into it, so the process the script signals as "ssh" is
+# the one waiting for the remote command, as before.
+detach() {
+  local wait=0
+  test "$1" = -w && { wait=1; shift; }
+  if command -v setsid >/dev/null 2>&1; then
+    if test "$wait" = 1; then exec setsid -f -w "$@"; fi
+    setsid -f "$@"
+    return
+  fi
+  local perl_detach='use POSIX (); my $w = shift; my $p = fork() // die;
+           if (!$p) { POSIX::setsid(); exec @ARGV or exit 127 }
+           exit 0 unless $w; waitpid($p, 0);
+           exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)'
+  if test "$wait" = 1; then exec perl -e "$perl_detach" 1 "$@"; fi
+  perl -e "$perl_detach" 0 "$@"
+}
 case "${SSH_DROP:-}:$*" in
   1:*--replay-only*)
-    setsid -f sh -c "$*" >/dev/null 2>&1
+    detach sh -c "$*" >/dev/null 2>&1
     sleep 1
     exit 255 ;;
 esac
 if test "$*" = "bash -s"; then
   script=$(cat)
   printf '%s\n' "$script" >> "$SSH_LOG"
-  exec setsid -f -w sh -c "$*" <<< "$script"
+  detach -w sh -c "$*" <<< "$script"
 fi
-exec setsid -f -w sh -c "$*"
+detach -w sh -c "$*"
 EOF
 cat > "$TOOLS/scp" <<'EOF'
 #!/bin/bash

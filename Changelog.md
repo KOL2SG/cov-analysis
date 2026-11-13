@@ -1,4 +1,6 @@
 # v1.3-dev
+- macOS support (tested on Apple Silicon) with the Xcode command line tools and `brew install bash coreutils findutils gawk`: started by macOS's bash 3.2, the script re-runs itself under bash >= 4.4; it puts Homebrew's GNU tools ahead of /usr/bin itself; it finds `llvm-profdata`/`llvm-cov` for Apple's clang through `xcrun` and next to a keg-only Homebrew clang; locks, remote cleanup and replay progress work without `/proc`. CI runs the suite on macOS too
+- driver: links on macOS. Mach-O cannot leave the weak `LLVMFuzzerInitialize` reference undefined the way ELF can, so the generated `coverage_driver.c` carries a weak default there that a harness's own `LLVMFuzzerInitialize` replaces
 - `--remote-dir` now names a parent for a private remote work directory; cleanup preserves files already in that parent
 - `--force` fences a superseded run from publishing or removing the new owner's report lock
 - `search` warns when coverage analysis is incomplete and prints matches from analyzable inputs; a failed union pre-check falls back to individual scans, while a search with no analyzable inputs still fails
